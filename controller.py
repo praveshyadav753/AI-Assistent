@@ -1,37 +1,4 @@
-"""
-Universal Desktop Controller — Plan/Execute Engine
--------------------------------------------------
-- Converts LLM-produced JSON action plans into real desktop actions
-- Covers keyboard, mouse, files, apps, browser, OCR, image match, timing, and simple conditions
 
-Dependencies (install as needed):
-    pip install pyautogui pillow pytesseract psutil pygetwindow
-
-Optional extras:
-    Tesseract OCR binary (for read_text_from_screen)
-        - Windows: https://github.com/UB-Mannheim/tesseract/wiki
-        - macOS:   brew install tesseract
-        - Linux:   sudo apt-get install tesseract-ocr
-
-Safety:
-- Dry-run option to preview actions
-- Whitelist for apps/commands/urls
-- Simple condition DSL to guard risky operations
-
-Usage:
-- Call execute_plan(steps, dry_run=True) to preview
-- Call execute_plan(steps) to actually run
-
-Example steps (JSON):
-[
-  {"action": "open_browser", "params": {"url": "https://www.google.com"}},
-  {"action": "wait", "params": {"seconds": 2}},
-  {"action": "keyboard_type", "params": {"text": "Tum Bin song"}},
-  {"action": "keyboard_press", "params": {"key": "enter"}}
-]
-
-LLM Planning Prompt (template): see LLM_PROMPT at the bottom.
-"""
 from __future__ import annotations
 
 import json
