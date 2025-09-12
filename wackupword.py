@@ -17,8 +17,8 @@ OUTPUT_WAV = "input.wav"
 def setup_wake_word():
     porcupine = pvporcupine.create(
         access_key="Xg0NgjiodpebDls2ulF4JYZpNy3NwuB9rdhSvuUaZiw21ZiWr7Y0Lg==",
-        keyword_paths=["nesty.ppn"],
-        sensitivities=[0.6]
+        keyword_paths=["Arina.ppn"],
+        sensitivities=[0.7]
     )
     pa = pyaudio.PyAudio()
     stream = pa.open(
@@ -33,6 +33,7 @@ def setup_wake_word():
 def listen_for_wake_word(porcupine, stream):
    
     while True:
+        print('...')
         pcm = stream.read(porcupine.frame_length, exception_on_overflow=False)
         pcm_unpacked = struct.unpack_from("h" * porcupine.frame_length, pcm)
         if porcupine.process(pcm_unpacked) >= 0:
