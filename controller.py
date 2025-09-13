@@ -1,3 +1,9 @@
+# controller.py
+"""
+A universal desktop automation controller that executes a series of steps
+defined in a JSON format. It supports a wide range of actions from opening
+applications and browsing URLs to controlling the mouse, keyboard, and filesystem.
+"""
 
 from __future__ import annotations
 
@@ -10,33 +16,34 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union, Callable
+from typing import Any, Callable, Dict, List, Optional, Union
 
-# Optional dependencies — guarded imports
+# --- Optional Dependencies (Guarded Imports) ---
 try:
     import pyautogui  # type: ignore
-    pyautogui.FAILSAFE = True  # move mouse to a corner to abort
-except Exception as e:
+    # Move mouse to a corner (0,0) to trigger a failsafe and abort
+    pyautogui.FAILSAFE = True
+except ImportError:
     pyautogui = None  # type: ignore
 
 try:
     from PIL import Image  # type: ignore
-except Exception:
+except ImportError:
     Image = None  # type: ignore
 
 try:
     import pytesseract  # type: ignore
-except Exception:
+except ImportError:
     pytesseract = None  # type: ignore
 
 try:
     import psutil  # type: ignore
-except Exception:
+except ImportError:
     psutil = None  # type: ignore
 
 try:
     import pygetwindow as gw  # type: ignore
-except Exception:
+except ImportError:
     gw = None  # type: ignore
 
 
@@ -45,10 +52,11 @@ except Exception:
 # ---------------------------
 @dataclass
 class SafetyConfig:
-    allow_apps: Optional[List[str]] = None         # e.g., ["notepad.exe", "code", "chrome", "explorer.exe"]
-    allow_commands: Optional[List[str]] = None     # allowlisted shell commands
-    allow_urls: Optional[List[str]] = None         # prefixes e.g., ["https://", "http://", "file://"] or specific domains
-    destructive_confirm: bool = True               # require explicit confirm flag for delete_file
+    """Configuration for safety constraints on the executor."""
+    allow_apps: Optional[List[str]] = None      # e.g., ["notepad", "code", "chrome"]
+    allow_commands: Optional[List[str]] = None  # Allowlisted shell commands
+    allow_urls: Optional[List[str]] = None      # URL prefixes or specific domains
+    destructive_confirm: bool = True            # Require explicit confirm flag for destructive actions
 
 DEFAULT_SAFETY = SafetyConfig(
     allow_apps=None,
@@ -62,60 +70,57 @@ DEFAULT_SAFETY = SafetyConfig(
 # Utilities
 # ---------------------------
 
-def _require(module, name: str):
+def _require(module: Any, name: str):
+    """Raises a RuntimeError if a required module is not installed."""
     if module is None:
-        raise RuntimeError(f"'{name}' is required for this action. Please install it.")
-
+        raise RuntimeError(
+            f"'{name}' is required for this action. Please install it, e.g., 'pip install {name}'"
+        )
 
 def _sleep(seconds: float):
+    """Sleeps for a given duration, ensuring it's non-negative."""
     time.sleep(max(0.0, float(seconds)))
 
-
-def _now_ms() -> int:
-    return int(time.time() * 1000)
-
-
 def _log(msg: str):
+    """Prints a message with a timestamp."""
     ts = time.strftime("%H:%M:%S")
     print(f"[{ts}] {msg}")
 
-
 def _platform_is_windows() -> bool:
+    """Checks if the current operating system is Windows."""
     return platform.system().lower() == "windows"
 
-
 def _normalize_path(p: Union[str, Path]) -> str:
+    """Resolves and expands a path to its absolute form."""
     return str(Path(p).expanduser().resolve())
 
+def _strip_quotes(s: str) -> str:
+    """Strips leading/trailing single or double quotes from a string."""
+    s = s.strip()
+    if (s.startswith('"') and s.endswith('"')) or \
+       (s.startswith("'") and s.endswith("'")):
+        return s[1:-1]
+    return s
+
 
 # ---------------------------
-# Condition DSL
+# Condition Evaluation DSL for `if_condition`
 # ---------------------------
-# Supported conditions (strings):
-#   window_open("TitleSubstr")
-#   image_visible("path/to.png")
-#   file_exists("path")
-#   not <condition>
-#
-# Example param for if_condition:
-# {"action":"if_condition","params":{"condition":"window_open('Chrome')","then":[...],"else":[...]}}
 
 class ConditionContext:
+    """Provides functions that can be evaluated within a condition string."""
     def window_open(self, title_substr: str) -> bool:
-        if gw is None:
-            return False
+        _require(gw, "pygetwindow")
         try:
-            wins = gw.getAllTitles()  # type: ignore
+            wins = gw.getAllTitles()
             return any(title_substr.lower() in t.lower() for t in wins if t.strip())
         except Exception:
             return False
 
     def image_visible(self, image_path: str, confidence: float = 0.8) -> bool:
-        if pyautogui is None:
-            return False
-        image_path = _normalize_path(image_path)
+        _require(pyautogui, "pyautogui")
         try:
-            loc = pyautogui.locateOnScreen(image_path, confidence=confidence)  # type: ignore
+            loc = pyautogui.locateOnScreen(_normalize_path(image_path), confidence=confidence)
             return loc is not None
         except Exception:
             return False
@@ -123,236 +128,261 @@ class ConditionContext:
     def file_exists(self, path: str) -> bool:
         return Path(_normalize_path(path)).exists()
 
-
 def evaluate_condition(expr: str, ctx: Optional[ConditionContext] = None) -> bool:
-    """Very small parser for our mini DSL; no eval()."""
+    """
+    A safe, simple parser for condition strings. Avoids using `eval()`.
+    Supports: function('arg'), not function('arg')
+    """
     ctx = ctx or ConditionContext()
     s = expr.strip()
 
-    # Handle not <cond>
-    if s.lower().startswith("not "):
-        return not evaluate_condition(s[4:].strip(), ctx)
+    is_negated = s.lower().startswith("not ")
+    if is_negated:
+        s = s[4:].strip()
 
-    def _extract_call(name: str) -> Optional[str]:
+    result = False
+    supported_fns = {
+        "window_open": ctx.window_open,
+        "image_visible": ctx.image_visible,
+        "file_exists": ctx.file_exists,
+    }
+
+    for name, fn in supported_fns.items():
         prefix = f"{name}("
         if s.startswith(prefix) and s.endswith(")"):
-            return s[len(prefix) : -1]
-        return None
-
-    arg = _extract_call("window_open")
-    if arg is not None:
-        return ctx.window_open(_strip_quotes(arg))
-
-    arg = _extract_call("image_visible")
-    if arg is not None:
-        return ctx.image_visible(_strip_quotes(arg))
-
-    arg = _extract_call("file_exists")
-    if arg is not None:
-        return ctx.file_exists(_strip_quotes(arg))
-
-    # Unknown condition — default False
-    return False
-
-
-def _strip_quotes(s: str) -> str:
-    s = s.strip()
-    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
-        return s[1:-1]
-    return s
+            arg_str = s[len(prefix) : -1]
+            result = fn(_strip_quotes(arg_str))
+            break
+    
+    return not result if is_negated else result
 
 
 # ---------------------------
 # Action Executor
 # ---------------------------
+
 class DesktopExecutor:
     def __init__(self, safety: SafetyConfig = DEFAULT_SAFETY):
         self.safety = safety
 
     # ---- App & Window ----
     def open_app(self, app: str):
-        if self.safety.allow_apps and app not in self.safety.allow_apps:
+        if self.safety.allow_apps and app.lower() not in self.safety.allow_apps:
             raise PermissionError(f"App not allowed by safety policy: {app}")
-        _log(f"open_app: {app}")
+        _log(f"Opening app: {app}")
 
         if _platform_is_windows():
-            pyautogui.hotkey("win")
-            time.sleep(0.5)
-            pyautogui.typewrite(app)
-            time.sleep(0.5)
-            pyautogui.press("enter")
-
+            try:
+                # First, try direct execution for common, predictable app names
+                common_apps = {
+                    'notepad': 'notepad.exe',
+                    'calculator': 'calc.exe',
+                    'paint': 'mspaint.exe',
+                    'cmd': 'cmd.exe',
+                    'powershell': 'powershell.exe',
+                    'explorer': 'explorer.exe'
+                }
+                app_lower = app.lower()
+                if app_lower in common_apps:
+                    subprocess.Popen(common_apps[app_lower])
+                    return
+                
+                # If not a common app, use the Start menu search method
+                _require(pyautogui, "pyautogui")
+                pyautogui.hotkey("win")
+                time.sleep(0.8)  # Wait for Start menu to open
+                pyautogui.typewrite(app, interval=0.05)
+                time.sleep(1.0)  # Wait for search results
+                pyautogui.press("enter")
+                
+            except Exception as e:
+                _log(f"Error opening app '{app}': {e}")
+                raise RuntimeError(f"Failed to open application: {app}")
+        else:
+            # For macOS/Linux, a more general approach
+            subprocess.Popen([app], shell=True)
 
     def open_browser(self, url: str):
         from webbrowser import open as wb_open
         if self.safety.allow_urls and not any(url.startswith(p) for p in self.safety.allow_urls):
             raise PermissionError(f"URL not allowed by safety policy: {url}")
-        _log(f"open_browser: {url}")
+        _log(f"Opening browser to: {url}")
         wb_open(url)
 
     def switch_window(self, window_title: str, exact: bool = False):
         _require(gw, "pygetwindow")
-        _log(f"switch_window: {window_title}")
-        windows = gw.getAllTitles()  # type: ignore
+        _log(f"Switching to window containing: '{window_title}'")
+        windows = gw.getAllWindows()
         target = None
-        for title in windows:
-            if not title.strip():
+        for w in windows:
+            if not w.title.strip():
                 continue
-            if (exact and title == window_title) or ((not exact) and window_title.lower() in title.lower()):
-                target = title
+            if (exact and w.title == window_title) or \
+               (not exact and window_title.lower() in w.title.lower()):
+                target = w
                 break
         if not target:
             raise RuntimeError(f"Window not found: {window_title}")
-        w = gw.getWindowsWithTitle(target)[0]  # type: ignore
-        w.activate()
+        target.activate()
 
-    def close_app(self, app: Optional[str] = None, window_title: Optional[str] = None):
-        _log(f"close_app: app={app} window_title={window_title}")
-        if window_title and gw is not None:
-            wins = gw.getWindowsWithTitle(window_title)  # type: ignore
-            for w in wins:
-                try:
-                    w.close()
-                except Exception:
-                    pass
-        if app and psutil is not None:
-            for proc in psutil.process_iter(attrs=["name"]):
-                try:
-                    if proc.info["name"] and app.lower() in proc.info["name"].lower():
-                        proc.terminate()
-                except Exception:
-                    pass
+    def close_app(self, window_title: str):
+        _require(gw, "pygetwindow")
+        _log(f"Closing app with window title: '{window_title}'")
+        wins = gw.getWindowsWithTitle(window_title)
+        if not wins:
+            _log(f"Warning: No window with title '{window_title}' found to close.")
+            return
+        for w in wins:
+            try:
+                w.close()
+            except Exception as e:
+                _log(f"Could not close window '{w.title}': {e}")
 
     # ---- Keyboard ----
     def keyboard_type(self, text: str, interval: float = 0.02):
         _require(pyautogui, "pyautogui")
-        _log(f"keyboard_type: '{text}'")
-        pyautogui.typewrite(text, interval=interval)  # type: ignore
+        _log(f"Typing text: '{text}'")
+        pyautogui.typewrite(text, interval=interval)
 
     def keyboard_press(self, key: str):
         _require(pyautogui, "pyautogui")
-        _log(f"keyboard_press: {key}")
-        pyautogui.press(key)  # type: ignore
+        _log(f"Pressing key: {key}")
+        pyautogui.press(key)
 
     def keyboard_shortcut(self, keys: List[str]):
         _require(pyautogui, "pyautogui")
-        _log(f"keyboard_shortcut: {' + '.join(keys)}")
-        pyautogui.hotkey(*keys)  # type: ignore
+        _log(f"Pressing shortcut: {' + '.join(keys)}")
+        pyautogui.hotkey(*keys)
 
     # ---- Mouse ----
     def mouse_click(self, position: Optional[List[int]] = None, button: str = "left", clicks: int = 1, interval: float = 0.1):
         _require(pyautogui, "pyautogui")
         if position:
             x, y = position
-            _log(f"mouse_click @ ({x},{y}) [{button}] x{clicks}")
-            pyautogui.click(x, y, clicks=clicks, interval=interval, button=button)  # type: ignore
+            _log(f"Clicking {button} button {clicks}x at ({x},{y})")
+            pyautogui.click(x, y, clicks=clicks, interval=interval, button=button)
         else:
-            _log(f"mouse_click at current [{button}] x{clicks}")
-            pyautogui.click(clicks=clicks, interval=interval, button=button)  # type: ignore
+            _log(f"Clicking {button} button {clicks}x at current position")
+            pyautogui.click(clicks=clicks, interval=interval, button=button)
 
     def mouse_move(self, position: List[int], duration: float = 0.2):
         _require(pyautogui, "pyautogui")
         x, y = position
-        _log(f"mouse_move -> ({x},{y}) in {duration}s")
-        pyautogui.moveTo(x, y, duration=duration)  # type: ignore
+        _log(f"Moving mouse to ({x},{y}) over {duration}s")
+        pyautogui.moveTo(x, y, duration=duration)
 
     def mouse_drag(self, from_pos: List[int], to_pos: List[int], duration: float = 0.3, button: str = "left"):
         _require(pyautogui, "pyautogui")
         x1, y1 = from_pos
         x2, y2 = to_pos
-        _log(f"mouse_drag ({x1},{y1}) -> ({x2},{y2}) [{button}] in {duration}s")
-        pyautogui.moveTo(x1, y1)  # type: ignore
-        pyautogui.dragTo(x2, y2, duration=duration, button=button)  # type: ignore
+        _log(f"Dragging mouse from ({x1},{y1}) to ({x2},{y2})")
+        pyautogui.moveTo(x1, y1)
+        pyautogui.dragTo(x2, y2, duration=duration, button=button)
 
     # ---- Scroll ----
     def scroll(self, amount: int):
         _require(pyautogui, "pyautogui")
-        _log(f"scroll: {amount}")
-        pyautogui.scroll(amount)  # type: ignore
+        _log(f"Scrolling by {amount} units")
+        pyautogui.scroll(amount)
 
     # ---- Image/UI ----
     def find_and_click_image(self, image: str, confidence: float = 0.85, timeout: float = 10.0, click: bool = True):
         _require(pyautogui, "pyautogui")
         img_path = _normalize_path(image)
-        _log(f"find_and_click_image: {img_path} (conf={confidence}, timeout={timeout})")
-        end = time.time() + timeout
+        _log(f"Finding image '{img_path}' with confidence > {confidence}")
+        
         loc_center = None
-        while time.time() < end:
+        start_time = time.time()
+        while time.time() - start_time < timeout:
             try:
-                box = pyautogui.locateOnScreen(img_path, confidence=confidence)  # type: ignore
+                box = pyautogui.locateOnScreen(img_path, confidence=confidence)
+                if box:
+                    loc_center = pyautogui.center(box)
+                    break
             except Exception:
-                box = None
-            if box:
-                loc_center = pyautogui.center(box)  # type: ignore
-                break
+                pass # Image not found yet
             _sleep(0.25)
+            
         if not loc_center:
-            raise RuntimeError(f"Image not found on screen: {img_path}")
+            raise RuntimeError(f"Image not found on screen after {timeout}s: {img_path}")
+        
+        _log(f"Image found at: {loc_center}")
         if click:
-            pyautogui.click(loc_center)  # type: ignore
+            pyautogui.click(loc_center)
         return loc_center
 
     def wait_for_image(self, image: str, confidence: float = 0.85, timeout: float = 15.0):
         _require(pyautogui, "pyautogui")
         img_path = _normalize_path(image)
-        _log(f"wait_for_image: {img_path} (conf={confidence}, timeout={timeout})")
-        end = time.time() + timeout
-        while time.time() < end:
+        _log(f"Waiting for image '{img_path}' to appear")
+
+        start_time = time.time()
+        while time.time() - start_time < timeout:
             try:
-                if pyautogui.locateOnScreen(img_path, confidence=confidence):  # type: ignore
+                if pyautogui.locateOnScreen(img_path, confidence=confidence):
+                    _log("Image found.")
                     return True
             except Exception:
                 pass
             _sleep(0.25)
+            
+        _log(f"Image did not appear after {timeout}s.")
         return False
 
     def read_text_from_screen(self, region: Optional[List[int]] = None, lang: str = "eng") -> str:
         _require(pyautogui, "pyautogui")
         _require(Image, "Pillow")
         _require(pytesseract, "pytesseract")
-        _log(f"read_text_from_screen: region={region}")
+        _log(f"Reading text from screen region: {region}")
+        
+        screenshot_args = {}
         if region:
             x, y, w, h = region
-            img = pyautogui.screenshot(region=(x, y, w, h))  # type: ignore
-        else:
-            img = pyautogui.screenshot()  # type: ignore
-        return pytesseract.image_to_string(img, lang=lang)  # type: ignore
+            screenshot_args['region'] = (x, y, w, h)
+            
+        img = pyautogui.screenshot(**screenshot_args)
+        text = pytesseract.image_to_string(img, lang=lang).strip()
+        _log(f"Read text: '{text[:100]}...'")
+        return text
 
     # ---- Filesystem ----
-    def copy_file(self, source: str, target: str):
+    def copy_file(self, source: str, destination: str):
         src = _normalize_path(source)
-        dst = _normalize_path(target)
-        _log(f"copy_file: {src} -> {dst}")
+        dst = _normalize_path(destination)
+        _log(f"Copying file: {src} -> {dst}")
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
 
-    def move_file(self, source: str, target: str):
+    def move_file(self, source: str, destination: str):
         src = _normalize_path(source)
-        dst = _normalize_path(target)
-        _log(f"move_file: {src} -> {dst}")
+        dst = _normalize_path(destination)
+        _log(f"Moving file: {src} -> {dst}")
         Path(dst).parent.mkdir(parents=True, exist_ok=True)
         shutil.move(src, dst)
 
     def delete_file(self, path: str, confirm: bool = False):
         if self.safety.destructive_confirm and not confirm:
-            raise PermissionError("delete_file requires confirm=true per safety policy")
+            raise PermissionError("delete_file requires `confirm=true` due to safety policy.")
         p = Path(_normalize_path(path))
-        _log(f"delete_file: {p}")
+        _log(f"Deleting path: {p}")
         if p.is_dir():
             shutil.rmtree(p)
         elif p.exists():
             p.unlink()
+        else:
+            _log(f"Warning: Path not found for deletion: {p}")
 
     def create_folder(self, path: str):
         p = Path(_normalize_path(path))
-        _log(f"create_folder: {p}")
+        _log(f"Creating folder: {p}")
         p.mkdir(parents=True, exist_ok=True)
 
     # ---- System ----
     def run_command(self, command: str, cwd: Optional[str] = None) -> int:
-        if self.safety.allow_commands and command.split()[0] not in self.safety.allow_commands:
+        cmd_base = command.split()[0]
+        if self.safety.allow_commands and cmd_base not in self.safety.allow_commands:
             raise PermissionError(f"Command not allowed by safety policy: {command}")
-        _log(f"run_command: {command}")
+        _log(f"Running command: '{command}' in '{cwd or os.getcwd()}'")
         proc = subprocess.Popen(command, shell=True, cwd=cwd)
         return proc.wait()
 
@@ -360,22 +390,24 @@ class DesktopExecutor:
         _require(pyautogui, "pyautogui")
         p = Path(_normalize_path(path))
         p.parent.mkdir(parents=True, exist_ok=True)
-        _log(f"take_screenshot -> {p} (region={region})")
+        _log(f"Taking screenshot -> {p}")
+
+        screenshot_args = {}
         if region:
             x, y, w, h = region
-            img = pyautogui.screenshot(region=(x, y, w, h))  # type: ignore
-        else:
-            img = pyautogui.screenshot()  # type: ignore
+            screenshot_args['region'] = (x, y, w, h)
+
+        img = pyautogui.screenshot(**screenshot_args)
         img.save(str(p))
 
     # ---- Timing & Flow ----
     def wait(self, seconds: float):
-        _log(f"wait: {seconds}s")
+        _log(f"Waiting for {seconds}s")
         _sleep(seconds)
 
-    def if_condition(self, condition: str, then: List[dict], else_: Optional[List[dict]] = None, **kwargs):
-        result = evaluate_condition(condition)
-        _log(f"if_condition: '{condition}' => {result}")
+    def if_condition(self, condition: str, then: List[dict], else_: Optional[List[dict]] = None):
+        result = evaluate_condition(condition, ConditionContext())
+        _log(f"Condition '{condition}' evaluated to: {result}")
         if result:
             self.execute_steps(then)
         elif else_:
@@ -383,169 +415,133 @@ class DesktopExecutor:
 
     # ---- Execution Engine ----
     def execute_steps(self, steps: List[Dict[str, Any]], dry_run: bool = False):
+        """Executes a list of automation steps with validation and error handling."""
         for i, step in enumerate(steps):
+            step_num = i + 1
             action = step.get("action")
             params = step.get("params", {}) or {}
+
             if not action:
-                raise ValueError(f"Step {i} missing 'action'")
+                raise ValueError(f"Step {step_num} is missing an 'action'")
+
             if dry_run:
-                _log(f"DRY-RUN {i+1:03d}: {action} {params}")
+                _log(f"DRY-RUN {step_num:03d}: {action} {params}")
                 continue
+
             handler = ACTION_HANDLERS.get(action)
             if not handler:
-                raise ValueError(f"Unsupported action: {action}")
-            # Map params to handler signature safely
+                raise ValueError(f"Unsupported action in step {step_num}: '{action}'")
+
             try:
+                _log(f"EXECUTING {step_num:03d}: {action}")
                 handler(self, **params)
+                _log(f"COMPLETED {step_num:03d}: {action}")
+
             except TypeError as te:
-                # Fallback: try passing the full params dict if signature mismatch
-                handler(self, **{k: v for k, v in params.items()})
+                _log(f"ERROR in step {step_num}: Parameter mismatch for action '{action}'. Provided params: {list(params.keys())}. Details: {te}")
+                raise
+            except Exception as e:
+                _log(f"ERROR in step {step_num}: Action '{action}' failed. Details: {e}")
+                raise
 
 
-# Action registry maps action name -> DesktopExecutor method
+# ---------------------------
+# Action Registry
+# ---------------------------
+# Maps action name (string) to the corresponding DesktopExecutor method.
+# This dictionary must be defined *after* the DesktopExecutor class.
 ACTION_HANDLERS: Dict[str, Callable[..., Any]] = {
-    # App & Window
     "open_app": DesktopExecutor.open_app,
     "open_browser": DesktopExecutor.open_browser,
     "switch_window": DesktopExecutor.switch_window,
     "close_app": DesktopExecutor.close_app,
-
-    # Keyboard
     "keyboard_type": DesktopExecutor.keyboard_type,
     "keyboard_press": DesktopExecutor.keyboard_press,
     "keyboard_shortcut": DesktopExecutor.keyboard_shortcut,
-
-    # Mouse
     "mouse_click": DesktopExecutor.mouse_click,
     "mouse_move": DesktopExecutor.mouse_move,
     "mouse_drag": DesktopExecutor.mouse_drag,
-
-    # Scroll
     "scroll": DesktopExecutor.scroll,
-
-    # Image/UI
     "find_and_click_image": DesktopExecutor.find_and_click_image,
     "wait_for_image": DesktopExecutor.wait_for_image,
     "read_text_from_screen": DesktopExecutor.read_text_from_screen,
-
-    # Filesystem
     "copy_file": DesktopExecutor.copy_file,
     "move_file": DesktopExecutor.move_file,
     "delete_file": DesktopExecutor.delete_file,
     "create_folder": DesktopExecutor.create_folder,
-
-    # System
     "run_command": DesktopExecutor.run_command,
     "take_screenshot": DesktopExecutor.take_screenshot,
-
-    # Timing & Flow
     "wait": DesktopExecutor.wait,
     "if_condition": DesktopExecutor.if_condition,
 }
 
 
 # ---------------------------
-# LLM Prompt Template
+# CLI Runner
 # ---------------------------
-LLM_PROMPT = r"""
-You are a Desktop Automation Planner.
-Convert the user request into a step-by-step JSON action plan that the automation system can execute.
-Use ONLY the following actions (and their exact names):
-- open_app, open_browser, switch_window, close_app
-- keyboard_type, keyboard_press, keyboard_shortcut
-- mouse_click, mouse_move, mouse_drag
-- scroll
-- find_and_click_image, wait_for_image, read_text_from_screen
-- copy_file, move_file, delete_file, create_folder
-- run_command, take_screenshot
-- wait, if_condition
 
-Rules:
-1) Output ONLY valid JSON array, no comments or extra text.
-2) Each step is: {"action": "<name>", "params": { ... }}
-3) Add wait steps where UIs load.
-4) Prefer robust interactions (wait_for_image/find_and_click_image) over raw coordinates.
-5) Use absolute paths and explicit URLs.
-6) For delete_file, include "confirm": true when you truly intend deletion.
-7) for opening application make sure to search application by pressing win key
-
-Examples:
-User: "Open Chrome and search cats"
-Output:
-[
-  {"action": "open_browser", "params": {"url": "https://www.google.com"}},
+DEFAULT_PLAN_EXAMPLE = [
+  {"action": "open_app", "params": {"app": "Notepad"}},
   {"action": "wait", "params": {"seconds": 2}},
-  {"action": "keyboard_type", "params": {"text": "cats"}},
-  {"action": "keyboard_press", "params": {"key": "enter"}}
+  {"action": "keyboard_type", "params": {"text": "Hello, World!\nThis is an automated test."}},
+  {"action": "wait", "params": {"seconds": 1}},
+  {"action": "keyboard_shortcut", "params": {"keys": ["ctrl", "s"]}},
+  {"action": "wait", "params": {"seconds": 1}},
+  {"action": "keyboard_type", "params": {"text": "HelloWorld.txt"}},
+  {"action": "keyboard_press", "params": {"key": "enter"}},
+  {"action": "wait", "params": {"seconds": 2}},
+  {"action": "close_app", "params": {"window_title": "HelloWorld.txt"}}
 ]
-
-User: "Make a Reports folder on Desktop and take a screenshot"
-Output:
-[
-  {"action": "create_folder", "params": {"path": "~/Desktop/Reports"}},
-  {"action": "take_screenshot", "params": {"path": "~/Desktop/Reports/screen.png"}}
-]
-"""
-
-
-# ---------------------------
-# CLI helper
-# ---------------------------
-# DEFAULT_PLAN_EXAMPLE = # [
-# #     {"action": "open_browser", "params": {"url": "https://www.youtube.com"}},
-# #     {"action": "wait", "params": {"seconds": 5}},
-# #     {"action": "keyboard_type", "params": {"text": "Tum Bin song"}},
-# #     {"action": "keyboard_press", "params": {"key": "enter"}},
-# # ]
-
-# [
-#   {"action": "open_app", "params": {"path": "C:/Users/YourUsername/AppData/Local/Programs/Microsoft VS Code/Code.exe"}},
-#   {"action": "wait", "params": {"seconds": 3}},
-#   {"action": "keyboard_shortcut", "params": {"keys": ["ctrl", "n"]}},
-#   {"action": "wait", "params": {"seconds": 1}},
-#   {"action": "keyboard_type", "params": {"text": "def fibonacci(n):\n    a, b = 0, 1\n    for _ in range(n):\n        print(a)\n        a, b = b, a + b\n\nfibonacci(10)"}},
-#   {"action": "wait", "params": {"seconds": 1}},
-#   {"action": "keyboard_shortcut", "params": {"keys": ["ctrl", "s"]}},
-#   {"action": "wait", "params": {"seconds": 1}},
-#   {"action": "keyboard_type", "params": {"text": "fab_series.py"}},
-#   {"action": "keyboard_press", "params": {"key": "enter"}}
-# ]
-
 
 def main(argv: List[str]):
-    import argparse
-
+    """Main function to run the controller from the command line."""
     parser = argparse.ArgumentParser(description="Universal Desktop Controller")
-    parser.add_argument("plan", nargs="?", help="JSON string or path to JSON file with steps")
-    parser.add_argument("--dry", action="store_true", help="Dry-run (do not execute actions)")
-    parser.add_argument("--safety", help="Path to safety config JSON (allowlists)")
+    parser.add_argument(
+        "plan",
+        nargs="?",
+        help="JSON string or path to a JSON file with steps. Uses a default example if not provided."
+    )
+    parser.add_argument("--dry", action="store_true", help="Dry-run (log actions without executing)")
+    parser.add_argument("--safety", help="Path to a custom safety config JSON file")
     args = parser.parse_args(argv)
 
     safety = DEFAULT_SAFETY
     if args.safety:
         with open(args.safety, "r", encoding="utf-8") as f:
-            s = json.load(f)
+            s_config = json.load(f)
         safety = SafetyConfig(
-            allow_apps=s.get("allow_apps"),
-            allow_commands=s.get("allow_commands"),
-            allow_urls=s.get("allow_urls"),
-            destructive_confirm=bool(s.get("destructive_confirm", True)),
+            allow_apps=s_config.get("allow_apps"),
+            allow_commands=s_config.get("allow_commands"),
+            allow_urls=s_config.get("allow_urls"),
+            destructive_confirm=bool(s_config.get("destructive_confirm", True)),
         )
 
-    if args.plan is None:
-        steps = DEFAULT_PLAN_EXAMPLE
-    else:
-        # If file exists, read from file; else treat as JSON string
+    if args.plan:
         p = Path(args.plan)
         if p.exists():
             with open(p, "r", encoding="utf-8") as f:
                 steps = json.load(f)
         else:
-            steps = json.loads(args.plan)
+            try:
+                steps = json.loads(args.plan)
+            except json.JSONDecodeError:
+                print(f"Error: Argument '{args.plan}' is not a valid file path or JSON string.")
+                sys.exit(1)
+    else:
+        print("No plan provided. Running the default example plan.")
+        steps = DEFAULT_PLAN_EXAMPLE
 
-    exec_ = DesktopExecutor(safety=safety)
-    exec_.execute_steps(steps, dry_run=args.dry)
+    print("--- Starting Automation Plan ---")
+    try:
+        executor = DesktopExecutor(safety=safety)
+        executor.execute_steps(steps, dry_run=args.dry)
+        print("--- Automation Plan Completed Successfully ---")
+    except Exception as e:
+        print(f"\n--- Automation Plan Failed ---")
+        print(f"An error occurred: {e}")
+        sys.exit(1)
 
 
-# if __name__ == "__main__":
-#     main(sys.argv[1:])
+if __name__ == "__main__":
+    import argparse
+    main(sys.argv[1:])
