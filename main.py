@@ -3,6 +3,7 @@ from speak import speak_response
 from speachtotext import listen_and_recognize
 from intent_handler import handle_user_request
 import asyncio
+from typing import Callable 
 import traceback
 import time
 import threading
@@ -23,7 +24,7 @@ def cleanup_resources(stream, pa, porcupine):
     except Exception as e:
         print(f"[ERROR] Cleanup failed: {e}")
 
-def handle_voice_command():
+def handle_voice_command(update_callback: Callable):
     """Main loop for wake word listening and handling commands."""
     while True:
         porcupine, pa, stream = None, None, None
@@ -43,32 +44,35 @@ def handle_voice_command():
                     porcupine, 
                     stream, 
                     speak_callback=speak_response,
-                    direct_wakeup_flag=direct_wakeup_flag  # ← Pass the flag!
+                    direct_wakeup_flag=direct_wakeup_flag , # ← Pass the flag!
+                    update_callback=update_callback # <-- Pass it down
+
                 )
 
             # Listen and process command
-            print("[INFO] Listening for command...")
+            # print("[INFO] Listening for command...")
+            update_callback("listening_started")
             command_text = listen_and_recognize()
 
             if not command_text.strip():
-                print("[WARN] No command detected. Restarting loop...")
+                update_callback("status_update", {"message": "Didn't catch that. Try again."})
                 continue
 
-            print(f"[DEBUG] Recognized command: {command_text}")
+            update_callback("command_recognized", {"command": command_text})
 
             # Handle the command asynchronously
             asyncio.run(handle_user_request(command_text))
 
         except KeyboardInterrupt:
-            print("\n[INFO] Voice assistant stopped by user.")
+            # print("\n[INFO] Voice assistant stopped by user.")
             break
 
         except Exception as e:
             print(f"[ERROR] {type(e).__name__}: {e}")
             traceback.print_exc()
-            print("[INFO] Restarting loop in 2 seconds...")
+            # print("[INFO] Restarting loop in 2 seconds...")
             time.sleep(2)
 
         finally:
             cleanup_resources(stream, pa, porcupine)
-            print("\n[INFO] Ready for next wake word / direct command...\n")
+            # print("\n[INFO] Ready for next wake word / direct command...\n")

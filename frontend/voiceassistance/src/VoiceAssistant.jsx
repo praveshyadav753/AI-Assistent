@@ -25,10 +25,7 @@ const VoiceAssistant = () => {
   const API_BASE_URL = "http://localhost:8000";
   const WS_URL = "ws://localhost:8000/ws";
 
-  const soundMap = {
-    wake_word_detected: "/sounds/wakeup.mp3",
-    listening_started: "/sounds/listening.mp3",
-  };
+  
 
   // Continuous wave animation
   useEffect(() => {
@@ -71,6 +68,7 @@ const VoiceAssistant = () => {
         // Map backend events to sound files
         const soundMap = {
           direct_wakeup: "../public/wakeup2.mp3",
+          wake_word_detected: "../public/wakeup2.mp3",
           listening_started: "/wakeup2.mp3",
           response_generated: "/response.mp3",
           // Add more events as needed
@@ -385,7 +383,7 @@ const VoiceAssistant = () => {
 
           {/* Assistant Status */}
           <div className="text-white/90 text-sm font-medium">
-            <span className="flex items-center gap-3">
+            {/* <span className="flex items-center gap-3">
               <div
                 className={`w-3 h-3 rounded-full ${
                   connectionStatus === "connected"
@@ -396,8 +394,8 @@ const VoiceAssistant = () => {
               {connectionStatus === "connected"
                 ? "Voice Assistant Active"
                 : "Voice Assistant Offline"}
-            </span>
-          </div>
+            // </span>*/}
+          </div> 
         </div>
       </div>
 
@@ -516,18 +514,8 @@ const VoiceAssistant = () => {
         </div>
       )}
 
-      {/* Demo Button */}
-      <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 z-10">
-        <button
-          onClick={simulateWakeWord}
-          disabled={connectionStatus !== "connected"}
-          className="px-8 py-4 bg-gradient-to-r from-cyan-500/20 to-purple-500/20 backdrop-blur-xl rounded-full text-white font-medium hover:from-cyan-500/30 hover:to-purple-500/30 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed border border-white/20 shadow-lg"
-        >
-          {connectionStatus === "connected"
-            ? 'Simulate "Hey Nesty"'
-            : "Backend Disconnected"}
-        </button>
-      </div>
+      
+      
 
       {/* Wake-up Popup */}
       {showWakeupPopup && (
