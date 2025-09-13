@@ -207,7 +207,7 @@ async def synthesize_text_to_speech(text="Hello...!", output_wav=None, voice=VOI
     except Exception as e:
         print(f"[ERROR] Legacy TTS failed: {e}")
 
-def speak_response(text, blocking=False, priority=False):
+async def speak_response(text, blocking=False, priority=False):
     """
     Main speech function with multiple modes:
     - blocking=False (default): Non-blocking async speech
@@ -278,7 +278,7 @@ async def test_fast_tts():
     await asyncio.sleep(2)
     print("✅ All tests complete")
 
-if __name__ == "__main__":
-    # Run tests
-    asyncio.run(test_fast_tts())
-    cleanup_speech()
+# if __name__ == "__main__":
+#     # Run tests
+#     asyncio.run(test_fast_tts())
+#     cleanup_speech()

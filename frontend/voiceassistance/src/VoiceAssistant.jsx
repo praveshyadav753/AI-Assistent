@@ -1,6 +1,6 @@
-// VoiceAssistant.js - Simplified React Frontend (No Start/Stop)
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { Mic, Volume2, Wifi, WifiOff } from "lucide-react";
+import AnimatedWave from "./animatedbar";
 
 const VoiceAssistant = () => {
   // State management (removed start/stop related states)
@@ -24,8 +24,6 @@ const VoiceAssistant = () => {
   // API base URL
   const API_BASE_URL = "http://localhost:8000";
   const WS_URL = "ws://localhost:8000/ws";
-
-  
 
   // Continuous wave animation
   useEffect(() => {
@@ -69,8 +67,8 @@ const VoiceAssistant = () => {
         const soundMap = {
           direct_wakeup: "../public/wakeup2.mp3",
           wake_word_detected: "../public/wakeup2.mp3",
-          listening_started: "/wakeup2.mp3",
-          response_generated: "/response.mp3",
+          // listening_started: "/wakeup2.mp3",
+          // response_generated: "/response.mp3",
           // Add more events as needed
         };
 
@@ -129,7 +127,7 @@ const VoiceAssistant = () => {
     // Update assistant state from backend
     if (assistant_state) {
       setIsAwake(assistant_state.is_awake || false);
-      setIsListening(assistant_state.is_listening || false);
+      setIsListening(assistant_state.is_listening || assistant_state.listening_started || false);
       setIsSpeaking(assistant_state.is_speaking || false);
       setUserQuery(assistant_state.current_command || "");
       setResponse(assistant_state.current_response || "");
@@ -138,8 +136,8 @@ const VoiceAssistant = () => {
 
     // Handle specific message types
     switch (type) {
-      case "initial_state":
-        console.log("Received initial state from backend");
+      case "hey nesty_state":
+        console.log("Received hey nesty state from backend");
         break;
 
       case "wake_word_detected":
@@ -231,8 +229,7 @@ const VoiceAssistant = () => {
 
       // Create dynamic wave effect based on state
       let baseIntensity = 0.4; // Default intensity when connected
-      if (isAwake) baseIntensity = 0.8;
-      else if (isListening) baseIntensity = 0.6;
+      if (isListening) baseIntensity = 0.8; // Changed from isAwake to isListening for more activity
       else if (isSpeaking) baseIntensity = 1.0;
       else if (connectionStatus !== "connected") baseIntensity = 0.2;
 
@@ -245,7 +242,7 @@ const VoiceAssistant = () => {
 
       // Dynamic colors based on state
       let hue = 200; // Default light blue
-      if (isAwake) hue = 180; // Cyan
+      if (isListening) hue = 180; // Cyan for listening
       else if (isSpeaking) hue = 280; // Purple
       else if (connectionStatus !== "connected") hue = 0; // Red
 
@@ -280,8 +277,7 @@ const VoiceAssistant = () => {
       const y = centerY + Math.sin(angle + wavePhase * 0.5) * baseRadius;
 
       let opacity = 0.5; // Default when connected
-      if (isAwake) opacity = 0.8;
-      else if (isListening) opacity = 0.6;
+      if (isListening) opacity = 0.8; // Increased opacity for listening
       else if (isSpeaking) opacity = 0.9;
       else if (connectionStatus !== "connected") opacity = 0.2;
 
@@ -319,7 +315,8 @@ const VoiceAssistant = () => {
       };
     }
 
-    if (isAwake && isListening) {
+    // Merged isAwake and isListening for a single "Listening" state
+    if (isListening) {
       return {
         title: "How can I help you?",
         subtitle: "Listening for your command...",
@@ -348,8 +345,9 @@ const VoiceAssistant = () => {
   const statusInfo = getStatusInfo();
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-950 via-purple-900 to-blue-950 flex flex-col items-center justify-center p-8 relative overflow-hidden">
+    <div className="  min-h-screen bg-gradient-to-br from-indigo-950 via-purple-900 to-blue-950 flex flex-col items-center justify-center p-8 relative overflow-hidden">
       {/* Animated background */}
+
       <div className="fixed inset-0 opacity-20">
         <div
           className="absolute inset-0 bg-gradient-to-r from-cyan-600/30 via-purple-600/30 to-pink-600/30"
@@ -359,6 +357,15 @@ const VoiceAssistant = () => {
           }}
         />
       </div>
+
+      {/* NEW: Animated Gradient for Listening State 
+        This div is rendered only when isListening is true.
+        It creates a gradient from the bottom that pulses using a custom animation.
+      */}
+      {isListening && (
+        <AnimatedWave/>
+       // <div className="  absolute bottom-0  right-0 left-0 h-2/3 bg-gradient-to-t from-cyan-500 to-transparent animate-pulse-from-bottom" />
+      )}
 
       {/* Status Bar */}
       <div className="absolute top-6 left-0 right-0 flex justify-between items-center px-8 z-10">
@@ -395,7 +402,7 @@ const VoiceAssistant = () => {
                 ? "Voice Assistant Active"
                 : "Voice Assistant Offline"}
             // </span>*/}
-          </div> 
+          </div>
         </div>
       </div>
 
@@ -448,7 +455,7 @@ const VoiceAssistant = () => {
               <stop
                 offset="0%"
                 stopColor={
-                  isAwake
+                  isListening // Changed from isAwake
                     ? "rgba(34, 211, 238, 0.9)"
                     : isSpeaking
                     ? "rgba(168, 85, 247, 0.9)"
@@ -460,7 +467,7 @@ const VoiceAssistant = () => {
               <stop
                 offset="100%"
                 stopColor={
-                  isAwake
+                  isListening // Changed from isAwake
                     ? "rgba(59, 130, 246, 0.7)"
                     : isSpeaking
                     ? "rgba(236, 72, 153, 0.7)"
@@ -514,9 +521,6 @@ const VoiceAssistant = () => {
         </div>
       )}
 
-      
-      
-
       {/* Wake-up Popup */}
       {showWakeupPopup && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
@@ -540,6 +544,7 @@ const VoiceAssistant = () => {
               </div>
             </div>
           </div>
+          
         </div>
       )}
 
@@ -561,6 +566,18 @@ const VoiceAssistant = () => {
         
         .animate-fade-in {
           animation: fade-in 0.5s ease-out;
+        }
+
+        /* NEW: Keyframes and class for the listening animation 
+        */
+        @keyframes pulse-from-bottom {
+          0% { opacity: 0; transform: translateY(15%); }
+          50% { opacity: 1; transform: translateY(0); }
+          100% { opacity: 0; transform: translateY(-15%); }
+        }
+
+        .animate-pulse-from-bottom {
+          animation: pulse-from-bottom 2.5s ease-in-out infinite;
         }
       `}</style>
     </div>
