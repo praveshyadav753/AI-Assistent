@@ -228,5 +228,3 @@ def test_speech_recognition():
         else:
             print("Invalid option")
 
-if __name__ == "__main__":
-    test_speech_recognition()

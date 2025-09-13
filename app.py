@@ -5,13 +5,11 @@ import json
 import asyncio
 from typing import List
 import time
+from contextlib import asynccontextmanager
 
 from main import handle_voice_command, direct_wakeup_flag
 
-app = FastAPI()
-
-# --- START: ADD THESE MISSING DEFINITIONS ---
-
+# --- Assistant State Definition ---
 class AssistantState:
     """A simple class to hold the assistant's state."""
     def __init__(self):
@@ -20,35 +18,27 @@ class AssistantState:
         self.is_speaking = False
         self.current_command = ""
         self.current_response = ""
-        self.message = "Initializing..."
+        self.message = ""
 
     def to_dict(self):
         return self.__dict__
 
 # Create the global state object and main event loop variable
 assistant_state = AssistantState()
-main_loop = None 
-
-# --- END: ADD THESE MISSING DEFINITIONS ---
-
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+main_loop = None
 voice_thread = None
 connected_websockets: List[WebSocket] = []
 
-@app.on_event("startup")
-async def startup_event():
-    """Start voice assistant when FastAPI starts"""
+# --- Lifespan Context Manager ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan context manager to handle startup and shutdown events.
+    This replaces the deprecated @app.on_event decorators.
+    """
+    # Startup
     global voice_thread, main_loop
     
-    # --- ADD THIS LINE ---
     # Get the main asyncio event loop so the background thread can use it
     main_loop = asyncio.get_running_loop()
     
@@ -67,24 +57,44 @@ async def startup_event():
         print(f"[SUCCESS] Voice assistant started - Thread ID: {voice_thread.ident}")
     else:
         print("[ERROR] Voice assistant thread failed to start!")
+    
+    yield  # This is where the application runs
+    
+    # Shutdown (cleanup code can go here if needed)
+    print("[INFO] Shutting down voice assistant...")
+    # Add any cleanup code here if necessary
 
-# --- START: FIX THIS BROADCAST FUNCTION ---
+# Create FastAPI app with lifespan handler
+app = FastAPI(lifespan=lifespan)
 
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Broadcast Function ---
 async def broadcast_message(payload: dict):
     """
     Broadcasts a full JSON payload to all connected WebSocket clients.
     """
+    disconnected = []
     for ws in connected_websockets:
         try:
-            # Use send_json to send the dictionary directly
             await ws.send_json(payload)
         except Exception:
-            # Ignore broken connections
-            pass
+            # Mark broken connections for removal
+            disconnected.append(ws)
+    
+    # Clean up disconnected websockets
+    for ws in disconnected:
+        if ws in connected_websockets:
+            connected_websockets.remove(ws)
 
-# --- END: FIX THIS BROADCAST FUNCTION ---
-
-
+# --- Update Function Called from Voice Thread ---
 def send_update_to_clients(event_type: str, data: dict = None):
     """
     This function is called FROM the voice assistant thread.
@@ -94,7 +104,7 @@ def send_update_to_clients(event_type: str, data: dict = None):
     if not data:
         data = {}
 
-    # (This state update logic is correct)
+    # Update assistant state based on event type
     if event_type == "status_update":
         assistant_state.message = data.get("message", assistant_state.message)
         if "Waiting for wake word" in assistant_state.message:
@@ -132,10 +142,9 @@ def send_update_to_clients(event_type: str, data: dict = None):
     }
     
     if main_loop and main_loop.is_running():
-        # This call now correctly matches the new broadcast_message function
         asyncio.run_coroutine_threadsafe(broadcast_message(payload), main_loop)
 
-# (The rest of your file is correct, no changes needed below this point)
+# --- API Endpoints ---
 @app.get("/")
 def root():
     return {"message": "Voice Assistant API is running"}
@@ -161,18 +170,29 @@ async def start_wakeup():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
-    print("WebSocket connected")
+    print(f"[INFO] WebSocket connected - Total connections: {len(connected_websockets) + 1}")
     connected_websockets.append(websocket)
+    
     try:
+        # Send initial state to the newly connected client
         initial_payload = {
             "type": "initial_state",
             "message": "Connected to voice assistant",
             "assistant_state": assistant_state.to_dict()
         }
         await websocket.send_json(initial_payload)
+        
+        # Keep the connection alive and handle incoming messages
         while True:
-            await websocket.receive_text()
+            # Wait for any message from the client (heartbeat/ping)
+            data = await websocket.receive_text()
+            # Optionally handle incoming messages from client here
+            # For now, just keep the connection alive
+            
     except WebSocketDisconnect:
-        print("WebSocket disconnected")
+        print(f"[INFO] WebSocket disconnected - Remaining connections: {len(connected_websockets) - 1}")
+    except Exception as e:
+        print(f"[ERROR] WebSocket error: {e}")
     finally:
-        connected_websockets.remove(websocket)
+        if websocket in connected_websockets:
+            connected_websockets.remove(websocket)
