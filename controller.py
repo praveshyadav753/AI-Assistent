@@ -280,9 +280,17 @@ class DesktopExecutor:
         pyautogui.dragTo(x2, y2, duration=duration, button=button)
 
     # ---- Scroll ----
-    def scroll(self, amount: int):
+    def scroll(self, direction: str, distance: int):
         _require(pyautogui, "pyautogui")
-        _log(f"Scrolling by {amount} units")
+        
+        amount = distance
+        if direction.lower() == "down":
+            amount = -distance  # Make the value negative to scroll down
+        elif direction.lower() != "up":
+            # Handle cases where direction isn't 'up' or 'down'
+            _log(f"Invalid scroll direction: '{direction}'. Defaulting to up.")
+
+        _log(f"Scrolling by {amount} units ({direction} for a distance of {distance})")
         pyautogui.scroll(amount)
 
     # ---- Image/UI ----
