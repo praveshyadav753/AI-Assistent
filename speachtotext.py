@@ -207,24 +207,24 @@ def listen_and_recognize(timeout=DEFAULT_TIMEOUT, direct_wakeup_flag=None):
     return speech_to_text.listen_and_recognize(timeout, direct_wakeup_flag)
 
 # Test function
-def test_speech_recognition():
-    """Test the speech recognition system"""
-    print("🧪 Testing Speech Recognition System")
-    print("=" * 50)
+# def test_speech_recognition():
+#     """Test the speech recognition system"""
+#     print("🧪 Testing Speech Recognition System")
+#     print("=" * 50)
     
-    while True:
-        print("\n1. Start listening")
-        print("2. Exit")
-        choice = input("Choose option: ").strip()
+#     while True:
+#         print("\n1. Start listening")
+#         print("2. Exit")
+#         choice = input("Choose option: ").strip()
         
-        if choice == '1':
-            result = listen_and_recognize(timeout=15)
-            if result:
-                print(f"\n✅ SUCCESS: '{result}'")
-            else:
-                print("\n❌ No speech recognized")
-        elif choice == '2':
-            break
-        else:
-            print("Invalid option")
+#         if choice == '1':
+#             result = listen_and_recognize(timeout=15)
+#             if result:
+#                 print(f"\n✅ SUCCESS: '{result}'")
+#             else:
+#                 print("\n❌ No speech recognized")
+#         elif choice == '2':
+#             break
+#         else:
+#             print("Invalid option")
 

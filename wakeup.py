@@ -3,7 +3,7 @@ import pvporcupine
 import pyaudio
 from typing import Callable
 import time
-
+import asyncio
 ACCESS_KEY = "Xg0NgjiodpebDls2ulF4JYZpNy3NwuB9rdhSvuUaZiw21ZiWr7Y0Lg=="
 KEYWORD_PATHS = ["nesty.ppn"]
 
@@ -55,12 +55,13 @@ def listen_for_wake_word(porcupine, stream, speak_callback=None, direct_wakeup_f
         while True:
             # Check for direct wakeup first
             if direct_wakeup_flag and direct_wakeup_flag.is_set():
+
                 print("[INFO] Direct wakeup flag detected")
                 direct_wakeup_flag.clear()
                 if update_callback:
                     update_callback("direct_wakeup")
-                if speak_callback:
-                    speak_callback("What can I help you with today?")
+                # if speak_callback:
+                #     asyncio.run(speak_callback("What can I help you?"))
                 return True
 
             # Read audio data with error handling
@@ -92,8 +93,8 @@ def listen_for_wake_word(porcupine, stream, speak_callback=None, direct_wakeup_f
                     print(f"[INFO] Wake word detected! (keyword index: {result})")
                     if update_callback:
                         update_callback("wake_word_detected")
-                    if speak_callback:
-                        speak_callback("What can I help you with today?")
+                    # if speak_callback:
+                    #  asyncio.run(speak_callback("What can I help you?")) 
                     return True
                     
             except struct.error as e:
